@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 The VPaint Developers.
+// Copyright (C) 2012-2018 The VPaint Developers.
 // See the COPYRIGHT file at the top-level directory of this distribution
 // and at https://github.com/dalboris/vpaint/blob/master/COPYRIGHT
 //
@@ -25,6 +25,8 @@
 #include "Background/BackgroundWidget.h"
 #include "VectorAnimationComplex/VAC.h"
 #include "VectorAnimationComplex/InbetweenFace.h"
+#include "LayersWidget.h"
+#include "Layer.h"
 
 #include "IO/FileVersionConverter.h"
 #include "XmlStreamWriter.h"
@@ -92,7 +94,7 @@ MainWindow::MainWindow() :
     new DevSettings();
 
     // Scene
-    scene_ = new Scene();
+    scene_ = Scene::createDefaultScene();
 
     // Timeline (must exist before multiview is created, so that newly created views can register to timeline)
     timeline_ = new Timeline(scene_, this);
@@ -116,8 +118,13 @@ MainWindow::MainWindow() :
     connect(multiView_, SIGNAL(settingsChanged()), this, SLOT(updateViewMenu()));
 
     // 3D View
-    view3D_ = new View3D(scene_, 0);
+    view3D_ = new View3D(scene_, nullptr);
     view3D_->setParent(this, Qt::Window);
+    view3DSettingsWidget_ = new View3DSettingsWidget();
+    view3DSettingsWidget_->setParent(this, Qt::Window);
+    view3DSettingsWidget_->setViewSettings(view3D_->settings());
+    connect(view3DSettingsWidget_, SIGNAL(changed()), view3D_, SLOT(update()));
+
     //view3D_->show();
     connect(view3D_, SIGNAL(allViewsNeedToUpdate()), this, SLOT(update()));
     connect(view3D_, SIGNAL(allViewsNeedToUpdatePicking()), this, SLOT(updatePicking()));
@@ -128,6 +135,14 @@ MainWindow::MainWindow() :
     selectionInfo_ = new SelectionInfoWidget(0);
     connect(scene(),SIGNAL(selectionChanged()),selectionInfo_,SLOT(updateInfo()));
     //selectionInfo_->show();
+
+    // Background Widget
+    backgroundWidget = new BackgroundWidget();
+    if (scene() && scene()->activeLayer())
+    {
+        backgroundWidget->setBackground(scene()->activeLayer()->background());
+    }
+    connect(scene(), SIGNAL(layerAttributesChanged()), this, SLOT(onSceneLayerAttributesChanged_()));
 
     // redraw when the scene changes
     connect(scene_, SIGNAL(needUpdatePicking()),
@@ -177,7 +192,13 @@ MainWindow::MainWindow() :
 
 void MainWindow::updateObjectProperties()
 {
-    inspector->setObjects(scene()->getVAC_()->selectedCells());
+    VectorAnimationComplex::CellSet selectedCells;
+    VectorAnimationComplex::VAC * vac = scene()->activeVAC();
+    if (vac)
+    {
+        selectedCells = vac->selectedCells();
+    }
+    inspector->setObjects(selectedCells);
 }
 
 View * MainWindow::activeView() const
@@ -598,7 +619,7 @@ void MainWindow::newDocument()
         setDocumentFilePath_("");
 
         // Set empty scene
-        Scene * newScene = new Scene();
+        Scene * newScene = Scene::createDefaultScene();
         scene_->copyFrom(newScene);
         delete newScene;
 
@@ -949,10 +970,8 @@ void MainWindow::write(XmlStreamWriter &xml)
         scene()->writeCanvas(xml);
         xml.writeEndElement();
 
-        // Layer
-        xml.writeStartElement("layer");
-        scene()->write(xml);
-        xml.writeEndElement();
+        // Layers
+        scene()->writeAllLayers(xml);
     }
     xml.writeEndElement();
 
@@ -962,6 +981,8 @@ void MainWindow::write(XmlStreamWriter &xml)
 
 void MainWindow::read(XmlStreamReader & xml)
 {
+    scene_->clear();
+
     if (xml.readNextStartElement())
     {
         if (xml.name() != "vec")
@@ -972,7 +993,6 @@ void MainWindow::read(XmlStreamReader & xml)
             return;
         }
 
-        int numLayer = 0;
         while (xml.readNextStartElement())
         {
             // Playback
@@ -990,17 +1010,7 @@ void MainWindow::read(XmlStreamReader & xml)
             // Layer
             else if (xml.name() == "layer")
             {
-                // For now, only supports one layer, i.e., it reads the first one and
-                // ignore all the others
-                ++numLayer;
-                if(numLayer == 1)
-                {
-                    scene_->read(xml);
-                }
-                else
-                {
-                    xml.skipCurrentElement();
-                }
+                scene_->readOneLayer(xml);
             }
 
             // Unknown
@@ -1143,6 +1153,11 @@ void MainWindow::manual()
     userManual_->show();
 }
 
+void MainWindow::onSceneLayerAttributesChanged_()
+{
+    backgroundWidget->setBackground(scene()->activeBackground());
+}
+
 void MainWindow::about()
 {
     if(!aboutDialog_)
@@ -1203,27 +1218,21 @@ void MainWindow::view3DActionSetChecked()
 
 void MainWindow::openClose3DSettings()
 {
-    if(view3D_)
+    if(view3DSettingsWidget_)
     {
-        if(view3D_->view3DSettingsWidget()->isVisible())
-        {
-            view3D_->hide();
-        }
-        else
-        {
-            view3D_->openViewSettings();
-        }
+        // toggle visibility
+        bool visible = view3DSettingsWidget_->isVisible();
+        view3DSettingsWidget_->setVisible(!visible);
     }
 
-    updateView3DActionCheckState();
-
+    updateView3DSettingsActionCheckState();
 }
 
 void MainWindow::updateView3DSettingsActionCheckState()
 {
-    if(view3D_)
+    if(view3DSettingsWidget_)
     {
-        if(view3D_->view3DSettingsWidget()->isVisible())
+        if(view3DSettingsWidget_->isVisible())
         {
             view3DSettingsActionSetChecked();
         }
@@ -1236,12 +1245,12 @@ void MainWindow::updateView3DSettingsActionCheckState()
 
 void MainWindow::view3DSettingsActionSetUnchecked()
 {
-    actionOpenView3DSettings->setChecked(false);
+    actionOpenCloseView3DSettings->setChecked(false);
 }
 
 void MainWindow::view3DSettingsActionSetChecked()
 {
-    actionOpenView3DSettings->setChecked(true);
+    actionOpenCloseView3DSettings->setChecked(true);
 }
 
 void MainWindow::updateViewMenu()
@@ -1474,13 +1483,13 @@ void MainWindow::createActions()
     actionOnionSkinning->setShortcutContext(Qt::ApplicationShortcut);
     connect(actionOnionSkinning, SIGNAL(triggered(bool)), this, SLOT(setOnionSkinningEnabled(bool)));
 
-    actionOpenView3DSettings = new QAction(tr("3D View Settings [Beta]"), this);
-    actionOpenView3DSettings->setCheckable(true);
-    actionOpenView3DSettings->setStatusTip(tr("Open the settings dialog for the 3D view"));
+    actionOpenCloseView3DSettings = new QAction(tr("3D View Settings [Beta]"), this);
+    actionOpenCloseView3DSettings->setCheckable(true);
+    actionOpenCloseView3DSettings->setStatusTip(tr("Open or Close the settings dialog for the 3D view"));
     //actionOpenView3DSettings->setShortcut(QKeySequence(Qt::CTRL + Qt::Key_5));
-    actionOpenView3DSettings->setShortcutContext(Qt::ApplicationShortcut);
-    connect(actionOpenView3DSettings, SIGNAL(triggered()), view3D_, SLOT(openViewSettings()));
-    connect(view3D_->view3DSettingsWidget(), SIGNAL(closed()), this, SLOT(view3DSettingsActionSetUnchecked()));
+    //actionOpenView3DSettings->setShortcutContext(Qt::ApplicationShortcut);
+    connect(actionOpenCloseView3DSettings, SIGNAL(triggered()), this, SLOT(openClose3DSettings()));
+    connect(view3DSettingsWidget_, SIGNAL(closed()), this, SLOT(view3DSettingsActionSetUnchecked()));
 
     actionOpenClose3D = new QAction(tr("3D View [Beta]"), this);
     actionOpenClose3D->setCheckable(true);
@@ -1783,12 +1792,13 @@ void MainWindow::createMenus()
     menuView->addAction(global()->toolModeToolBar()->toggleViewAction());
     menuView->addAction(dockTimeLine->toggleViewAction());
     menuView->addAction(dockBackgroundWidget->toggleViewAction());
+    menuView->addAction(dockLayersWidget->toggleViewAction());
     advancedViewMenu = menuView->addMenu(tr("Advanced [Beta]")); {
         advancedViewMenu->addAction(dockInspector->toggleViewAction());
         advancedViewMenu->addAction(dockAdvancedSettings->toggleViewAction());
         advancedViewMenu->addAction(dockAnimatedCycleEditor->toggleViewAction());
         advancedViewMenu->addAction(actionOpenClose3D);
-        advancedViewMenu->addAction(actionOpenView3DSettings);
+        advancedViewMenu->addAction(actionOpenCloseView3DSettings);
     }
 
     menuBar()->addMenu(menuView);
@@ -1914,10 +1924,6 @@ void MainWindow::createDocks()
 
     // ----- Background ---------
 
-    // Widget
-    backgroundWidget = new BackgroundWidget();
-    backgroundWidget->setBackground(scene()->background());
-
     // Dock
     dockBackgroundWidget = new QDockWidget(tr("Background"));
     dockBackgroundWidget->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -1925,6 +1931,16 @@ void MainWindow::createDocks()
     addDockWidget(Qt::RightDockWidgetArea, dockBackgroundWidget);
     //dockBackgroundWidget->hide(); todo: uncomment (commented for convenience while developing)
 
+    // ----- Layers ---------
+
+    // Widget
+    layersWidget = new LayersWidget(scene());
+
+    // Dock
+    dockLayersWidget = new QDockWidget(tr("Layers"));
+    dockLayersWidget->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    dockLayersWidget->setWidget(layersWidget);
+    addDockWidget(Qt::RightDockWidgetArea, dockLayersWidget);
 
     // ----- TimeLine -------------
 

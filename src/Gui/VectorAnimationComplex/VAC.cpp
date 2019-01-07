@@ -1779,7 +1779,9 @@ void VAC::endSketchEdge()
 {
     if(sketchedEdge_)
     {
-        InbetweenFace * sface = hoveredCell_->toInbetweenFace();
+        InbetweenFace * sface = nullptr;
+        if (hoveredCell_)
+            sface = hoveredCell_ ->toInbetweenFace();
         if(sface && global()->planarMapMode())
             hoveredCell_ = keyframe_(sface, timeInteractivity_);
 
@@ -5583,8 +5585,6 @@ void VAC::uncut()
 
 void VAC::cut(VAC* & clipboard)
 {
-    timeCopy_ = global()->activeTime();
-
     if(selectedCells().isEmpty())
         return;
 
@@ -5592,6 +5592,8 @@ void VAC::cut(VAC* & clipboard)
         delete clipboard;
 
     clipboard = subcomplex(selectedCells());
+    clipboard->timeCopy_ = global()->activeTime();
+
     smartDelete_(selectedCells());
 
     emit needUpdatePicking();
@@ -5610,6 +5612,7 @@ void VAC::copy(VAC* & clipboard)
         delete clipboard;
 
     clipboard = subcomplex(selectedCells());
+    clipboard->timeCopy_ = global()->activeTime();
 }
 
 void VAC::paste(VAC *& clipboard)
@@ -5617,7 +5620,7 @@ void VAC::paste(VAC *& clipboard)
     if(!clipboard) return;
 
     // Get different between current time and copy time
-    Time deltaTime = global()->activeTime() - timeCopy_;
+    Time deltaTime = global()->activeTime() - clipboard->timeCopy_;
 
     // Offset clipboard VAC by deltaTime
     VAC * cloneOfClipboard = clipboard->clone();

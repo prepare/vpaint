@@ -23,19 +23,28 @@
 #include "OpenGL.h"
 #include "Global.h"
 
+#include "SaveAndLoad.h"
+
+#include <QToolBar>
+
+#include "Layer.h"
+
 Scene::Scene() :
+    activeLayerIndex_(-1),
     left_(0),
     top_(0),
     width_(1280),
-    height_(720),
-    background_(new Background(this))
+    height_(720)
 {
-    VectorAnimationComplex::VAC * vac = new VectorAnimationComplex::VAC();
-    connect(vac,SIGNAL(selectionChanged()),this,SIGNAL(selectionChanged()));
-    connect(background_, SIGNAL(changed()), this, SIGNAL(changed()));
-    connect(background_, SIGNAL(checkpoint()), this, SIGNAL(checkpoint()));
-    addSceneObject(vac);
     indexHovered_ = -1;
+}
+
+Scene * Scene::createDefaultScene()
+{
+    Scene * res = new Scene();
+    Layer * layer = res->createLayer(tr("Layer 1"));
+    layer->background()->setColor(Qt::white);
+    return res;
 }
 
 double Scene::left() const
@@ -82,11 +91,6 @@ void Scene::setHeight(double h)
     emitChanged();
 }
 
-Background * Scene::background() const
-{
-    return background_;
-}
-
 void Scene::setCanvasDefaultValues()
 {
     left_ = 0;
@@ -99,10 +103,7 @@ void Scene::setCanvasDefaultValues()
 
 void Scene::copyFrom(Scene * other)
 {
-    // XXX
-    // In this method, here's is what's wrong:
-    //  - canvas is not copied
-    //  - VAC is should copied in a cleaner way (take Background as a model)
+    // XXX We should also copy canvas properties
 
     // Block signals
     blockSignals(true);
@@ -110,15 +111,13 @@ void Scene::copyFrom(Scene * other)
     // Reset to default
     clear(true);
 
-    // Copy VAC
-    foreach(SceneObject *sceneObject, other->sceneObjects_)
-        addSceneObject(sceneObject->clone(), true);
+    // Copy layers
+    foreach(Layer * layer, other->layers_)
+        addLayer_(layer->clone(), true);
+    activeLayerIndex_ = other->activeLayerIndex_;
 
     // Reset hovered
     indexHovered_ = -1;
-
-    // Copy background
-    background_->setData(other->background_);
 
     // Unblock signals
     blockSignals(false);
@@ -126,37 +125,33 @@ void Scene::copyFrom(Scene * other)
     // Emit signals
     emit needUpdatePicking();
     emitChanged();
-
-    // Create new connections
-    VectorAnimationComplex::VAC * vac = getVAC_();
-    if(vac)
-    {
-        connect(vac,SIGNAL(selectionChanged()),this,SIGNAL(selectionChanged()));
-        emit selectionChanged();
-    }
+    emit selectionChanged();
+    emit layerAttributesChanged();
 }
 
 void Scene::clear(bool silent)
 {
-    VectorAnimationComplex::VAC * vac = getVAC_();
-    if(vac)
-        disconnect(vac,SIGNAL(selectionChanged()),this,SIGNAL(selectionChanged()));
+    // Block signals
+    blockSignals(true);
 
-    foreach(SceneObject *sceneObject, sceneObjects_)
-        delete sceneObject;
-    sceneObjects_.clear();
+    // Delete all layers
+    foreach(Layer * layer, layers_)
+        delete layer;
+    layers_.clear();
+    activeLayerIndex_ = -1;
 
     // XXX Shouldn't this clear left/top/width/height too?
 
-    // Reset background data
-    // As a side effect, this clears the cache if there were any
-    background_->resetData();
+    // Unblock signals
+    blockSignals(false);
 
+    // Emit signals
     if(!silent)
     {
         emitChanged();
         emit needUpdatePicking();
         emit selectionChanged();
+        emit layerAttributesChanged();
     }
 }
 
@@ -166,40 +161,40 @@ Scene::~Scene()
 }
 
 // ----------------------- Save and Load -------------------------
-#include "SaveAndLoad.h"
 
 void Scene::save(QTextStream & out)
 {
+    // XXX Deprecated
+    /*
     out << Save::newField("SceneObjects");
     out << "\n" << Save::indent() << "[";
     Save::incrIndent();
-    foreach(SceneObject *sceneObject, sceneObjects_)
+    foreach(Layer * layer, layers_)
     {
         out << Save::openCurlyBrackets();
-        sceneObject->save(out);
+        layer->vac()->save(out);
         out << Save::closeCurlyBrackets();
     }
     Save::decrIndent();
     out << "\n" << Save::indent() << "]";
+    */
 }
-
 
 void Scene::exportSVG(Time t, QTextStream & out)
 {
-    // Export background
-    background_->exportSVG(t.frame(), out,
-                           left(), top(), width(), height());
-
-    // Export VAC
-    foreach(SceneObject *sceneObject, sceneObjects_)
+    // Export Layers
+    foreach(Layer * layer, layers_)
     {
-        sceneObject->exportSVG(t, out);
+        layer->background()->exportSVG(
+            t.frame(), out, left(), top(), width(), height());
+        layer->exportSVG(t, out);
     }
 }
 
-
 void Scene::read(QTextStream & in)
 {
+    // XXX Deprecated
+    /*
     clear(true);
     
     QString field;
@@ -208,13 +203,13 @@ void Scene::read(QTextStream & in)
     Read::skipBracket(in); // [
     while(Read::string(in) == "{")
     {
-        addSceneObject(SceneObject::read(in), true);
+        addLayer(SceneObject::read(in), true);
         Read::skipBracket(in); // }
     }
     // if here, last read string == ]
 
 
-    VectorAnimationComplex::VAC * vac = getVAC_();
+    VectorAnimationComplex::VAC * vac = activeLayer();
     if(vac)
     {
         connect(vac,SIGNAL(selectionChanged()),this,SIGNAL(selectionChanged()));
@@ -223,51 +218,36 @@ void Scene::read(QTextStream & in)
     emit changed();
     emit needUpdatePicking();
     emit selectionChanged();
+    */
 }
 
-void Scene::write(XmlStreamWriter & xml)
+void Scene::writeAllLayers(XmlStreamWriter & xml)
 {
-    // Background
-    xml.writeStartElement("background");
-    background()->write(xml);
-    xml.writeEndElement();
-
-    // Vector animation complex
-    xml.writeStartElement("objects");
-    vectorAnimationComplex()->write(xml);
-    xml.writeEndElement();
+    foreach(Layer * layer, layers_)
+    {
+        xml.writeStartElement("layer");
+        layer->write(xml);
+        xml.writeEndElement();
+    }
 }
 
-void Scene::read(XmlStreamReader & xml)
+void Scene::readOneLayer(XmlStreamReader & xml)
 {
+    // Precondition: XML element "layer" just opened
+
+    // XXX Remove this
     blockSignals(true);
 
-    clear(true);
+    Layer * layer = new Layer();
+    layer->read(xml);
+    addLayer_(layer, true);
 
-    while (xml.readNextStartElement())
-    {
-        if (xml.name() == "background")
-        {
-            background()->read(xml);
-        }
-        else if (xml.name() == "objects")
-        {
-            VectorAnimationComplex::VAC * vac = new VectorAnimationComplex::VAC();
-            vac->read(xml);
-            addSceneObject(vac, true);
-            connect(vac,SIGNAL(selectionChanged()),this,SIGNAL(selectionChanged()));
-        }
-        else
-        {
-            xml.skipCurrentElement();
-        }
-    }
-
+    // XXX Remove these: only emit once after finishing to read the file
     blockSignals(false);
-
     emit needUpdatePicking();
     emit changed();
     emit selectionChanged();
+    emit layerAttributesChanged();
 }
 
 void Scene::readCanvas(XmlStreamReader & xml)
@@ -301,7 +281,10 @@ void Scene::writeCanvas(XmlStreamWriter & xml)
 
 void Scene::relativeRemap(const QDir & oldDir, const QDir & newDir)
 {
-    background()->relativeRemap(oldDir, newDir);
+    foreach(Layer * layer, layers_)
+    {
+        layer->background()->relativeRemap(oldDir, newDir);
+    }
 }
 
 // ----------------------- Drawing the scene -------------------------
@@ -354,24 +337,32 @@ void Scene::drawCanvas(ViewSettings & /*viewSettings*/)
 
 void Scene::draw(Time time, ViewSettings & viewSettings)
 {
-    // Draw VAC
-    // XXX this was over-engineered. Should revert to something simpler:
-    //  vac_->draw(time, viewSettings);
-    // and later:
-    //   foreach(Layer * layer, layers_)
-    //     layer->draw(time, viewSettings);
-    foreach(SceneObject *sceneObject, sceneObjects_)
+    // Draw layers
+    foreach(Layer * layer, layers_)
     {
-        sceneObject->draw(time, viewSettings);
+        layer->draw(time, viewSettings);
     }
 }
 
 void Scene::drawPick(Time time, ViewSettings & viewSettings)
 {
-    for(int i=0; i<sceneObjects_.size(); i++)
+    // Find which layer to pick
+    Layer * layer = activeLayer();
+    int index = -1;
+    for(int i=0; i<layers_.size(); i++)
     {
-        Picking::setIndex(i);
-          sceneObjects_[i]->drawPick(time, viewSettings);
+        if (layers_[i] == layer)
+        {
+            index = i;
+            break;
+        }
+    }
+
+    // Draw picking information
+    if (index >= 0)
+    {
+        Picking::setIndex(index);
+        layer->drawPick(time, viewSettings);
     }
 }
 
@@ -386,168 +377,131 @@ void Scene::setHoveredObject(Time time, int index, int id)
 {
     setNoHoveredObject();
     indexHovered_ = index;
-    sceneObjects_[index]->setHoveredObject(time, id);
+    layers_[index]->setHoveredObject(time, id);
 }
 
 void Scene::setNoHoveredObject()
 {
     if(indexHovered_ != -1)
     {
-        sceneObjects_[indexHovered_]->setNoHoveredObject();
+        layers_[indexHovered_]->setNoHoveredObject();
         indexHovered_ = -1;
     }
 }
+
 void Scene::select(Time time, int index, int id)
 {
-    sceneObjects_[index]->select(time, id);
+    layers_[index]->select(time, id);
 }
+
 void Scene::deselect(Time time, int index, int id)
 {
-    sceneObjects_[index]->deselect(time, id);
+    layers_[index]->deselect(time, id);
 }
+
 void Scene::toggle(Time time, int index, int id)
 {
-    sceneObjects_[index]->toggle(time, id);
+    layers_[index]->toggle(time, id);
 }
+
 void Scene::deselectAll(Time time)
 {
-    foreach(SceneObject * so, sceneObjects_)
-        so->deselectAll(time);
+    foreach(Layer * layer, layers_)
+        layer->deselectAll(time);
 }
+
 void Scene::deselectAll()
 {
-    foreach(SceneObject * so, sceneObjects_)
-        so->deselectAll();
+    foreach(Layer * layer, layers_)
+        layer->deselectAll();
 }
+
 void Scene::invertSelection()
 {
-    foreach(SceneObject * so, sceneObjects_)
-        so->invertSelection();
+    foreach(Layer * layer, layers_)
+        layer->invertSelection();
 }
-
-
-// ---------------- VAC specific Selection -----------------------
-
 
 void Scene::selectAll()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->selectAll();
+        layer->vac()->selectAll();
     }
 }
 
 void Scene::selectConnected()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->selectConnected();
+        layer->vac()->selectConnected();
     }
 }
 
 void Scene::selectClosure()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->selectClosure();
+        layer->vac()->selectClosure();
     }
 }
 
 void Scene::selectVertices()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->selectVertices();
+        layer->vac()->selectVertices();
     }
 }
 
 void Scene::selectEdges()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->selectEdges();
+        layer->vac()->selectEdges();
     }
 }
 
 void Scene::selectFaces()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->selectFaces();
+        layer->vac()->selectFaces();
     }
 }
 
 void Scene::deselectVertices()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->deselectVertices();
+        layer->vac()->deselectVertices();
     }
 }
 
 void Scene::deselectEdges()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->deselectEdges();
+        layer->vac()->deselectEdges();
     }
 }
 
 void Scene::deselectFaces()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-            vac->deselectFaces();
+        layer->vac()->deselectFaces();
     }
 }
-
-
-// ----------------------- User Interactions -------------------------
 
 void Scene::keyPressEvent(QKeyEvent *event)
 {
@@ -559,535 +513,455 @@ void Scene::keyReleaseEvent(QKeyEvent *event)
     event->ignore();
 }
 
-VectorAnimationComplex::VAC * Scene::vectorAnimationComplex()
+void Scene::addLayer_(Layer * layer, bool silent)
 {
-    return getVAC_();
-}
+    layers_ << layer;
+    if (activeLayerIndex_ < 0) {
+        activeLayerIndex_ = 0;
+    }
 
-void Scene::addSceneObject(SceneObject * sceneObject, bool silent)
-{
-    sceneObjects_ << sceneObject;
-    connect(sceneObject, SIGNAL(changed()),
-          this, SIGNAL(changed()));
-    connect(sceneObject, SIGNAL(checkpoint()),
-          this, SIGNAL(checkpoint()));
-    connect(sceneObject, SIGNAL(needUpdatePicking()),
-          this, SIGNAL(needUpdatePicking()));
+    connect(layer, SIGNAL(changed()), this, SIGNAL(changed()));
+    connect(layer, SIGNAL(checkpoint()), this, SIGNAL(checkpoint()));
+    connect(layer, SIGNAL(needUpdatePicking()), this, SIGNAL(needUpdatePicking()));
+    connect(layer, SIGNAL(selectionChanged()), this, SIGNAL(selectionChanged()));
+    connect(layer, SIGNAL(layerAttributesChanged()), this, SIGNAL(layerAttributesChanged()));
+
     if(!silent)
     {
         emitChanged();
         emit needUpdatePicking();
+        emit layerAttributesChanged();
     }
 }
 
-#include <QToolBar>
-
 void Scene::populateToolBar(QToolBar * toolBar)
 {
-    // Actions of the whole scene
-    // put undo redo here
-
-    // Actions of specific scene objects
     VectorAnimationComplex::VAC::populateToolBar(toolBar, this);
 }
 
 void Scene::deleteSelectedCells()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-        
-        if(vac)
-        {
-            vac->deleteSelectedCells();
-        }
+        layer->vac()->deleteSelectedCells();
     }
-    
 }
 
 void Scene::test()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->test();
-        }
+        layer->vac()->test();
     }
-
 }
 
 void Scene::smartDelete()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->smartDelete();
-        }
+        layer->vac()->smartDelete();
     }
-
 }
 
-VectorAnimationComplex::VAC * Scene::getVAC_()
+int Scene::numLayers() const
 {
-    using VectorAnimationComplex::VAC;
+    return layers_.size();
+}
 
-    if(sceneObjects_.isEmpty())
+Layer* Scene::layer(int i) const
+{
+    if (0 <= i && i < numLayers())
     {
-        return 0;
+        return layers_[i];
     }
     else
     {
-        SceneObject * sceneObject = sceneObjects_[0];
-        VAC * vac = dynamic_cast<VAC *>(sceneObject);
-        return vac;
+        return nullptr;
+    }
+}
+
+void Scene::setActiveLayer(int i)
+{
+    if(i != activeLayerIndex_ && 0 <= i && i < numLayers())
+    {
+        deselectAll();
+
+        activeLayerIndex_ = i;
+
+        emitChanged();
+        emit needUpdatePicking();
+        emit layerAttributesChanged();
+    }
+}
+
+Layer * Scene::activeLayer() const
+{
+    return layer(activeLayerIndex_);
+}
+
+int Scene::activeLayerIndex() const
+{
+    return activeLayerIndex_;
+}
+
+VectorAnimationComplex::VAC * Scene::activeVAC() const
+{
+    Layer * layer = activeLayer();
+    return layer ? layer->vac() : nullptr;
+}
+
+Background * Scene::activeBackground() const
+{
+    Layer * layer = activeLayer();
+    return layer ? layer->background() : nullptr;
+}
+
+Layer * Scene::createLayer()
+{
+    return createLayer(tr("Layer %1").arg(numLayers() + 1));
+}
+
+Layer * Scene::createLayer(const QString & name)
+{
+    // Create new layer, add it on top for now
+    Layer * layer = new Layer(name);
+    addLayer_(layer, true);
+
+    // Move above active layer, or keep last if no active layer
+    int newActiveLayerIndex = layers_.size() - 1;
+    if (0 <= activeLayerIndex_ && activeLayerIndex_ < newActiveLayerIndex - 1)
+    {
+        newActiveLayerIndex = activeLayerIndex_ + 1;
+        for (int i = layers_.size() - 1; i > newActiveLayerIndex; --i)
+        {
+            layers_[i] = layers_[i-1];
+        }
+        layers_[newActiveLayerIndex] = layer;
+    }
+
+    // Set as active
+    activeLayerIndex_ = newActiveLayerIndex;
+
+    // Emit signals
+    emitChanged();
+    emit needUpdatePicking();
+    emit layerAttributesChanged();
+
+    return layer;
+}
+
+void Scene::moveActiveLayerUp()
+{
+    int i = activeLayerIndex_;
+    if(0 <= i && i < numLayers() - 1)
+    {
+        // Swap out layers
+        int j = i + 1;
+        std::swap(layers_[i], layers_[j]);
+
+        // Set new active index.
+        // Note: we don't call setActiveLayer(j) to avoid calling deselectAll().
+        activeLayerIndex_ = j;
+
+        // Emit signals. Note: it may be tempting to think that updating
+        // picking is unnecessary (because the pickable cells haven't moved),
+        // however the picking image data contains the layer index which has
+        // changed, and therefore this picking image needs to be re-rendered.
+        emitChanged();
+        emit needUpdatePicking();
+        emit layerAttributesChanged();
+    }
+}
+
+void Scene::moveActiveLayerDown()
+{
+    int i = activeLayerIndex_;
+    if(0 < i && i < numLayers())
+    {
+        // Swap out layers
+        int j = i - 1;
+        std::swap(layers_[i], layers_[j]);
+
+        // Set new active index.
+        // Note: we don't call setActiveLayer(j) to avoid calling deselectAll().
+        activeLayerIndex_ = j;
+
+        // Emit signals. Note: it may be tempting to think that updating
+        // picking is unnecessary (because the pickable cells haven't moved),
+        // however the picking image data contains the layer index which has
+        // changed, and therefore this picking image needs to be re-rendered.
+        emitChanged();
+        emit needUpdatePicking();
+        emit layerAttributesChanged();
+    }
+}
+
+void Scene::destroyActiveLayer()
+{
+    int i = activeLayerIndex_;
+    if(0 <= i && i < numLayers())
+    {
+        deselectAll();
+
+        Layer * toBeDestroyedLayer = layers_[i];
+        layers_.removeAt(i);
+
+        // Set as active the layer below, unless it was the bottom-most layer
+        // or the only layer in the scene.
+        if (numLayers() == 0)
+        {
+            // no more layers
+            activeLayerIndex_ = -1;
+        }
+        else if (activeLayerIndex_ == 0)
+        {
+            // was the bottom-most layer
+            activeLayerIndex_ = 0;
+        }
+        else
+        {
+            // had layer below
+            --activeLayerIndex_;
+        }
+
+        delete toBeDestroyedLayer;
+
+        emitChanged();
+        emit needUpdatePicking();
+        emit layerAttributesChanged();
     }
 }
 
 VectorAnimationComplex::InbetweenFace * Scene::createInbetweenFace()
 {
-    VectorAnimationComplex::VAC * vac = getVAC_();
-
-    if(vac)
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        return vac->newInbetweenFace(QList<VectorAnimationComplex::AnimatedCycle>(),
-                                       QSet<VectorAnimationComplex::KeyFace*>(),
-                                       QSet<VectorAnimationComplex::KeyFace*>());
+        return layer->vac()->newInbetweenFace(
+                    QList<VectorAnimationComplex::AnimatedCycle>(),
+                    QSet<VectorAnimationComplex::KeyFace*>(),
+                    QSet<VectorAnimationComplex::KeyFace*>());
     }
     else
     {
-        return 0;
+        return nullptr;
     }
 }
 
 void Scene::cut(VectorAnimationComplex::VAC* & clipboard)
 {
-    VectorAnimationComplex::VAC * vac = getVAC_();
-    if(vac)
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        vac->cut(clipboard);
+        layer->vac()->cut(clipboard);
     }
 }
 
 void Scene::copy(VectorAnimationComplex::VAC* & clipboard)
 {
-    VectorAnimationComplex::VAC * vac = getVAC_();
-    if(vac)
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        vac->copy(clipboard);
+        layer->vac()->copy(clipboard);
     }
 }
 
 void Scene::paste(VectorAnimationComplex::VAC* & clipboard)
 {
-    VectorAnimationComplex::VAC * vac = getVAC_();
-    if(vac)
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        vac->paste(clipboard);
+        layer->vac()->paste(clipboard);
     }
 }
 
 void Scene::motionPaste(VectorAnimationComplex::VAC* & clipboard)
 {
-    VectorAnimationComplex::VAC * vac = getVAC_();
-    if(vac)
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        vac->motionPaste(clipboard);
+        layer->vac()->motionPaste(clipboard);
     }
 }
 
-
 void Scene::createFace()
 {
-
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->createFace();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->createFace();
     }
-
 }
 
 void Scene::addCyclesToFace()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->addCyclesToFace();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->addCyclesToFace();
     }
-
 }
 
 void Scene::removeCyclesFromFace()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->removeCyclesFromFace();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->removeCyclesFromFace();
     }
-
 }
 
 void Scene::changeColor()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->changeColor();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->changeColor();
     }
-
 }
 void Scene::raise()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->raise();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->raise();
     }
-
 }
+
 void Scene::lower()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->lower();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->lower();
     }
-
 }
 
 void Scene::raiseToTop()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->raiseToTop();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->raiseToTop();
     }
-
 }
+
 void Scene::lowerToBottom()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->lowerToBottom();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->lowerToBottom();
     }
-
 }
+
 void Scene::altRaise()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->altRaise();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->altRaise();
     }
-
 }
+
 void Scene::altLower()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->altLower();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->altLower();
     }
-
 }
 
 void Scene::altRaiseToTop()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->altRaiseToTop();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->altRaiseToTop();
     }
-
 }
+
 void Scene::altLowerToBottom()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->altLowerToBottom();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->altLowerToBottom();
     }
-
 }
 
 void Scene::changeEdgeWidth()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->changeEdgeWidth();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->changeEdgeWidth();
     }
-
 }
 
 void Scene::glue()
 {
-
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->glue();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->glue();
     }
-
 }
 
 void Scene::unglue()
 {
-
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->unglue();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->unglue();
     }
-
 }
 
 void Scene::uncut()
 {
-
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->uncut();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->uncut();
     }
-
 }
 
 void Scene::inbetweenSelection()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->inbetweenSelection();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->inbetweenSelection();
     }
 }
 
 void Scene::keyframeSelection()
 {
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->keyframeSelection();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->keyframeSelection();
     }
 }
 
-
 void Scene::resetCellsToConsiderForCutting()
 {
-
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->resetCellsToConsiderForCutting();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->resetCellsToConsiderForCutting();
     }
-
 }
 
 void Scene::updateCellsToConsiderForCutting()
 {
-
-    if(!sceneObjects_.isEmpty())
+    Layer * layer = activeLayer();
+    if(layer)
     {
-        // todo:  get  the  selected  one  instead  of  the  first
-        VectorAnimationComplex::VAC * vac =
-            dynamic_cast<VectorAnimationComplex::VAC *>
-            (sceneObjects_[0]);
-
-        if(vac)
-        {
-            vac->updateCellsToConsiderForCutting();
-            // currently, signals for updating view and picking are called
-            // inside the previous call. Not sure if it's a good idea.
-        }
+        layer->vac()->updateCellsToConsiderForCutting();
     }
-
 }
-
-    

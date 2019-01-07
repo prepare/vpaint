@@ -37,13 +37,10 @@ View3D::View3D(Scene *scene, QWidget *parent) :
     vac_(0)
 {
     // Make renderers
-    Background * bg = scene_->background();
-    backgroundRenderers_[bg] = new BackgroundRenderer(bg, context(), this);
+    // XXX Make it work with layers
+    //Background * bg = scene_->background();
+    //backgroundRenderers_[bg] = new BackgroundRenderer(bg, context(), this);
 
-
-    viewSettingsWidget_ = new View3DSettingsWidget(viewSettings_);
-    viewSettingsWidget_->setParent(this, Qt::Window);
-    connect(viewSettingsWidget_, SIGNAL(changed()), this, SLOT(update()));
 
     cameraTravellingIsEnabled_ = true;
     drawingIsEnable_ = false;
@@ -76,19 +73,8 @@ View3D::~View3D()
     deletePicking();
 }
 
-void View3D::openViewSettings()
-{
-    viewSettingsWidget_->show();
-}
-
-void View3D::closeViewSettings()
-{
-    viewSettingsWidget_->hide();
-}
-
-View3DSettingsWidget * View3D::view3DSettingsWidget() const
-{
-    return viewSettingsWidget_;
+View3DSettings * View3D::settings() {
+    return &viewSettings_;
 }
 
 void View3D::closeEvent(QCloseEvent * event)
@@ -122,18 +108,6 @@ View3D::MouseEvent View3D::mouseEvent() const
     me.shift = mouse_ShiftWasDown_;
     return me;
 }
-
-void View3D::update()
-{
-    updateGL();
-    // at first, I've  put updatePicking here, but it  has an issue:
-    // when  the  window  is  resized, updateGL()  is  automatically
-    // called, but then not updatePicking...
-    //
-    // Hence, it  is now called  inside drawScene, even  though it's
-    // kinda weird
-}
-
 
 void View3D::MoveEvent(double x, double y)
 {
@@ -367,7 +341,10 @@ void View3D::drawScene()
     using namespace VectorAnimationComplex;
 
     // Get VAC
-    VAC * vac = scene_->vectorAnimationComplex();
+    VAC * vac = scene_->activeVAC();
+    if (!vac) {
+        return;
+    }
 
     // Get t-position of camera eye to determine back-to front order
     double zEye = camera_.position()[2];
@@ -517,7 +494,8 @@ void View3D::drawScene()
         if(params.drawCanvas)
         {
             drawCanvas_();
-            drawBackground_(scene_->background(), t);
+            // XXX Make it work with layers
+            //drawBackground_(scene_->background(), t);
         }
 
         // Draw cells
@@ -576,14 +554,10 @@ void View3D::drawScene()
  */
 
 void View3D::drawPick3D()
-{/*
-    foreach(int i, displayedTimes_)
+{
+    if(scene_->activeVAC())
     {
-    Picking::setTime(i);*/
-    //Picking::setTime(0);
-    if(scene_->vectorAnimationComplex())
-    {
-        scene_->vectorAnimationComplex()->drawPick3D(viewSettings_);
+        scene_->activeVAC()->drawPick3D(viewSettings_);
     }
 }
 

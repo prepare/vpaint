@@ -1,4 +1,4 @@
-// Copyright (C) 2012-2016 The VPaint Developers.
+// Copyright (C) 2012-2018 The VPaint Developers.
 // See the COPYRIGHT file at the top-level directory of this distribution
 // and at https://github.com/dalboris/vpaint/blob/master/COPYRIGHT
 //
@@ -32,6 +32,8 @@ class EditCanvasSizeDialog;
 class ExportPngDialog;
 class AboutDialog;
 class BackgroundWidget;
+class LayersWidget;
+class View3DSettingsWidget;
 
 namespace VectorAnimationComplex
 {
@@ -131,6 +133,9 @@ private slots:
     void onlineDocumentation();
     void gettingStarted();
     void manual();
+
+    // Update docks when scene changes
+    void onSceneLayerAttributesChanged_();
     
 private:
     // ---------- initializations --------------
@@ -184,6 +189,7 @@ private:
     VectorAnimationComplex::VAC * clipboard_;
     // 3D view
     View3D * view3D_;
+    View3DSettingsWidget * view3DSettingsWidget_;
     // timeline
     Timeline * timeline_;
     // Selection info
@@ -230,7 +236,7 @@ private:
       QAction * actionOnionSkinning;
       QAction * actionToggleOutline;
       QAction * actionToggleOutlineOnly;
-      QAction * actionOpenView3DSettings;
+      QAction * actionOpenCloseView3DSettings;
       QAction * actionOpenClose3D;
       QAction * actionSplitVertical;
       QAction * actionSplitHorizontal;
@@ -284,6 +290,8 @@ private:
     AnimatedCycleWidget * animatedCycleEditor;
     BackgroundWidget * backgroundWidget;
     QDockWidget * dockBackgroundWidget;
+    LayersWidget * layersWidget;
+    QDockWidget * dockLayersWidget;
 };
 
 #endif

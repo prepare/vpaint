@@ -31,22 +31,33 @@ class VAC;
 class InbetweenFace;
 }
 class QDir;
+class Layer;
 
 class Scene: public QObject
 {
     Q_OBJECT
     
 public:
+    // Creates an empty scene, that is, a scene with zero layers
     Scene();
+
+    // Creates a scene with one default layer
+    static Scene * createDefaultScene();
+
+    // Makes this scene a clone of the other scene
+    // Note: "copy" would be a better name but is already taken (copy/paste slots)
     void copyFrom(Scene * other);
+
+    // Clears the scene by deleting all its layers. If silent is true, then
+    // this function no signal will be emitted.
     void clear(bool silent = false);
+
+    // Destroys the scene
     ~Scene();
 
-    QList<SceneObject*> sceneObjects() {return sceneObjects_;}
-
     // Keyboard events
-      void keyPressEvent(QKeyEvent *event);
-      void keyReleaseEvent(QKeyEvent *event);
+    void keyPressEvent(QKeyEvent *event);
+    void keyReleaseEvent(QKeyEvent *event);
 
     // Drawing (assumes a 2D OpenGL context is setup)
     void drawCanvas(ViewSettings & viewSettings);
@@ -72,20 +83,35 @@ public:
     void exportSVG(Time t, QTextStream & out);
     void save(QTextStream & out);
     void read(QTextStream & in);
-    void write(XmlStreamWriter & xml);
-    void read(XmlStreamReader & xml);
+    void writeAllLayers(XmlStreamWriter & xml);
+    void readOneLayer(XmlStreamReader & xml);
     void readCanvas(XmlStreamReader & xml);
     void writeCanvas(XmlStreamWriter & xml);
     void relativeRemap(const QDir & oldDir, const QDir & newDir);
 
-    // Scene Objects getters
-    VectorAnimationComplex::VAC * vectorAnimationComplex();
+    // Get layer from index
+    int numLayers() const;
+    Layer* layer(int i) const;
+
+    // Active layer
+    void setActiveLayer(int i);
+    Layer * activeLayer() const;
+    int activeLayerIndex() const; // returns -1 if no active layers.
+    VectorAnimationComplex::VAC * activeVAC() const;
+    Background * activeBackground() const;
+
+    // Create layer above active layer, or last if no active layer
+    // Set as active layer
+    Layer * createLayer();
+    Layer * createLayer(const QString & name);
+    void moveActiveLayerUp();
+    void moveActiveLayerDown();
+
+    // destroy the given layer
+    void destroyActiveLayer();
     
     // GUI
     void populateToolBar(QToolBar * toolBar);
-
-    // get relevant VAC to work on
-    VectorAnimationComplex::VAC * getVAC_();
 
     // Other
     VectorAnimationComplex::InbetweenFace * createInbetweenFace();
@@ -101,9 +127,6 @@ public:
     void setWidth(double w);
     void setHeight(double h);
     void setCanvasDefaultValues();
-
-    // Background
-    Background * background() const;
     
 public slots:
     // --------- Tools ----------
@@ -164,11 +187,15 @@ signals:
     void needUpdatePicking(); // Make sure to call this only once, when necessary
 
     void selectionChanged();
+    void layerAttributesChanged();
 
     
 private:
-    void addSceneObject(SceneObject * sceneObject, bool silent = false);
-    QList<SceneObject*> sceneObjects_;
+    // Layers are ordered back to front,
+    // Example: layers_[0] is the bottom-most layer, rendered first
+    void addLayer_(Layer * layer, bool silent = false);
+    QList<Layer*> layers_;
+    int activeLayerIndex_;
 
     int indexHovered_;
 
@@ -176,8 +203,6 @@ private:
     double top_;
     double width_;
     double height_;
-
-    Background * background_;
 };
     
 #endif

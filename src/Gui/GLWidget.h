@@ -31,13 +31,12 @@
 #define GLWIDGET_H
 
 #include "OpenGL.h"
-#include <QGLWidget>
+#include <QOpenGLWidget>
 
 #include "GLWidget_Camera.h"
 #include "GLWidget_Camera2D.h"
 #include "GLWidget_Light.h"
 #include "GLWidget_Material.h"
-#include "GLWidget_Settings.h"
 #include <QMouseEvent>
 #include <QElapsedTimer>
 
@@ -55,7 +54,7 @@ public:
     static const int Zoom = 3;
 };
 
-class GLWidget : public QGLWidget
+class GLWidget : public QOpenGLWidget
 {
     Q_OBJECT
 
@@ -79,9 +78,6 @@ public:
 
     // enable or disable camera control
     void enableCameraMovement(bool value);
-
-    // get GLWidget settings as a widget
-    GLWidget_Settings * settings();
 
 signals:
     // called when the camera is moved. In practice,
@@ -190,7 +186,6 @@ protected:
     bool cameraDollyIsEnabled_;
     bool cameraTravellingIsEnabled_;
     bool cameraZoomIsEnabled_;
-    GLWidget_Settings * settings_;
 
     // Handling Mouse Event
     // At most one of these is true at one time:

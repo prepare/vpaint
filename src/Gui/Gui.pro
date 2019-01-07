@@ -1,4 +1,4 @@
-# Copyright (C) 2012-2016 The VPaint Developers.
+# Copyright (C) 2012-2018 The VPaint Developers.
 # See the COPYRIGHT file at the top-level directory of this distribution
 # and at https://github.com/dalboris/vpaint/blob/master/COPYRIGHT
 #
@@ -59,9 +59,16 @@ win32: CONFIG += embed_manifest_exe
 ###############################################################################
 #                     UNSHIPPED EXTERNAL LIBRARIES
 
+# OpenGL
+win32 {
+    LIBS += opengl32.lib
+}
+
 # GLU
 unix:!macx: LIBS += -lGLU
-
+win32 {
+    LIBS += glu32.lib
+}
 
 ###############################################################################
 #                      SHIPPED EXTERNAL LIBRARIES
@@ -96,7 +103,6 @@ HEADERS += MainWindow.h \
     Random.h \
     GLUtils.h \
     GLWidget.h \
-    GLWidget_Settings.h \
     GLWidget_Camera.h \
     GLWidget_Camera2D.h \
     GLWidget_Material.h \
@@ -172,7 +178,7 @@ HEADERS += MainWindow.h \
     EditCanvasSizeDialog.h \
     ExportPngDialog.h \
     AboutDialog.h \
-    ViewMacOsX.h \
+    ViewWidget.h \
     Application.h \
     Background/Background.h \
     Background/BackgroundData.h \
@@ -188,7 +194,9 @@ HEADERS += MainWindow.h \
     Version.h \
     UpdateCheck.h \
     VectorAnimationComplex/BoundingBox.h \
-    VectorAnimationComplex/TransformTool.h
+    VectorAnimationComplex/TransformTool.h \
+    LayersWidget.h \
+    Layer.h
 
 SOURCES += main.cpp \
     SaveAndLoad.cpp \
@@ -196,7 +204,6 @@ SOURCES += main.cpp \
     Random.cpp \
     GLUtils.cpp  \
     GLWidget.cpp  \
-    GLWidget_Settings.cpp \
     MainWindow.cpp \
     GeometryUtils.cpp \
     SceneObject.cpp \
@@ -262,7 +269,7 @@ SOURCES += main.cpp \
     EditCanvasSizeDialog.cpp \
     ExportPngDialog.cpp \
     AboutDialog.cpp \
-    ViewMacOsX.cpp \
+    ViewWidget.cpp \
     Application.cpp \
     Background/Background.cpp \
     Background/BackgroundData.cpp \
@@ -278,4 +285,6 @@ SOURCES += main.cpp \
     Version.cpp \
     UpdateCheck.cpp \
     VectorAnimationComplex/BoundingBox.cpp \
-    VectorAnimationComplex/TransformTool.cpp
+    VectorAnimationComplex/TransformTool.cpp \
+    LayersWidget.cpp \
+    Layer.cpp

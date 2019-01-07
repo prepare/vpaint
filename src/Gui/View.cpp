@@ -17,6 +17,7 @@
 #include "Background/BackgroundRenderer.h"
 #include "VectorAnimationComplex/VAC.h"
 #include "VectorAnimationComplex/Cell.h"
+#include "Layer.h"
 
 #include <QtDebug>
 #include <QApplication>
@@ -55,10 +56,6 @@ View::View(Scene * scene, QWidget * parent) :
     currentAction_(0),
     vac_(0)
 {
-    // Make renderers
-    Background * bg = scene_->background();
-    backgroundRenderers_[bg] = new BackgroundRenderer(bg, context(), this);
-
     // View settings widget
     viewSettingsWidget_ = new ViewSettingsWidget(viewSettings_, this);
     connect(viewSettingsWidget_, SIGNAL(changed()), this, SLOT(update()));
@@ -129,7 +126,7 @@ void View::keyReleaseEvent(QKeyEvent *event)
 
 void View::handleNewKeyboardModifiers()
 {
-    vac_ = scene_->vectorAnimationComplex();
+    vac_ = scene_->activeVAC();
 
     // Rectangle of selection
     if(vac_ && currentAction_ == RECTANGLE_OF_SELECTION_ACTION)
@@ -160,7 +157,8 @@ void View::update()
     GLWidget_Camera2D c = camera2D();
     c.setZoom(viewSettings_.zoom());
     setCamera2D(c);
-    updateGL();
+
+    GLWidget::update();
 }
 
 void View::updateZoomFromView()
@@ -175,67 +173,64 @@ void View::updateZoomFromView()
 
 int View::decideClicAction()
 {
-    vac_ = scene_->vectorAnimationComplex();
-
-    // Selection
-    if( (global()->toolMode() == Global::SELECT && mouse_LeftButton_) //||
-        //(global()->toolMode() == Global::SKETCH && mouse_LeftButton_) ||
-        //(global()->toolMode() == Global::SCULPT && mouse_LeftButton_) ||
-        //(global()->toolMode() == Global::CUT && mouse_LeftButton_) ||
-        //(mouse_RightButton_)
-        )
+    vac_ = scene_->activeVAC();
+    if (vac_)
     {
-        // Left = set selection
-        if(!mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_)
+        // Selection
+        if (global()->toolMode() == Global::SELECT && mouse_LeftButton_)
         {
-            if (vac_->hoveredCell())
-                return SELECT_ACTION;
-            else if (!vac_->hoveredTransformWidgetId())
-                return DESELECTALL_ACTION;
+            // Left = set selection
+            if(!mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                if (vac_->hoveredCell())
+                    return SELECT_ACTION;
+                else if (!vac_->hoveredTransformWidgetId())
+                    return DESELECTALL_ACTION;
+            }
+            // Shift + Left = add to selection
+            if(!mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               mouse_ShiftWasDown_)
+            {
+                return ADDSELECT_ACTION;
+            }
+            // Alt + Left = remove from selection
+            if(mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                return DESELECT_ACTION;
+            }
+            // Alt + Shift + Left = toggle selection state
+            if(mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               mouse_ShiftWasDown_)
+            {
+                return TOGGLESELECT_ACTION;
+            }
         }
-        // Shift + Left = add to selection
-        if(!mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           mouse_ShiftWasDown_)
-        {
-            return ADDSELECT_ACTION;
-        }
-        // Alt + Left = remove from selection
-        if(mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_)
-        {
-            return DESELECT_ACTION;
-        }
-        // Alt + Shift + Left = toggle selection state
-        if(mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           mouse_ShiftWasDown_)
-        {
-            return TOGGLESELECT_ACTION;
-        }
-    }
 
-    // Cut edge
-    if( global()->toolMode() == Global::SELECT &&
-         mouse_LeftButton_ &&
-         !mouse_AltWasDown_ &&
-         mouse_ControlWasDown_ &&
-         !mouse_ShiftWasDown_)
-    {
-        return SPLIT_ACTION;
-    }
+        // Cut edge
+        if( global()->toolMode() == Global::SELECT &&
+             mouse_LeftButton_ &&
+             !mouse_AltWasDown_ &&
+             mouse_ControlWasDown_ &&
+             !mouse_ShiftWasDown_)
+        {
+            return SPLIT_ACTION;
+        }
 
-    // Paint
-    if( global()->toolMode() == Global::PAINT &&
-        mouse_LeftButton_ &&
-        !mouse_AltWasDown_ &&
-        !mouse_ControlWasDown_ &&
-        !mouse_ShiftWasDown_)
-    {
-        return PAINT_ACTION;
+        // Paint
+        if( global()->toolMode() == Global::PAINT &&
+            mouse_LeftButton_ &&
+            !mouse_AltWasDown_ &&
+            !mouse_ControlWasDown_ &&
+            !mouse_ShiftWasDown_)
+        {
+            return PAINT_ACTION;
+        }
     }
 
     return GLWidget::decideClicAction();
@@ -243,127 +238,119 @@ int View::decideClicAction()
 
 int View::decidePMRAction()
 {
-    vac_ = scene_->vectorAnimationComplex();
-
-    if(global()->toolMode() == Global::SELECT)
+    vac_ = scene_->activeVAC();
+    if (vac_)
     {
         // Selection
-        if( (global()->toolMode() == Global::SELECT && mouse_LeftButton_) //||
-            //(global()->toolMode() == Global::SKETCH && mouse_LeftButton_) ||
-            //(global()->toolMode() == Global::SCULPT && mouse_LeftButton_) ||
-            //(global()->toolMode() == Global::CUT && mouse_LeftButton_) ||
-            //(mouse_RightButton_)
-            )
+        if(global()->toolMode() == Global::SELECT)
         {
-
-        }
-        if( vac_->hoveredCell() &&
-            mouse_LeftButton_ &&
-            !mouse_AltWasDown_ &&
-            !mouse_ControlWasDown_ &&
-            !mouse_ShiftWasDown_)
-        {
-            return DRAG_AND_DROP_ACTION;
-        }
-        else if( vac_->hoveredTransformWidgetId() &&
-                 mouse_LeftButton_ &&
-                 /*!mouse_AltWasDown_ &&*/
-                 !mouse_ControlWasDown_ /*&&
-                 !mouse_ShiftWasDown_*/)
-        {
-            return TRANSFORM_SELECTION_ACTION;
-        }
-        else if (hoveredObject_.isNull() &&
-                 mouse_LeftButton_ &&
-                 !mouse_ControlWasDown_ )
-        {
-            return RECTANGLE_OF_SELECTION_ACTION;
-        }
-    }
-    else if(global()->toolMode() == Global::SKETCH)
-    {
-        if(mouse_LeftButton_ &&
-           !mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_ &&
-           vac_)
-        {
-            return SKETCH_ACTION;
-        }
-        // Ctrl + Left
-        if(mouse_LeftButton_ &&
-           !mouse_AltWasDown_ &&
-           mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_ &&
-           vac_)
-        {
-            return SKETCH_CHANGE_PEN_WIDTH_ACTION;
-        }
-        // Alt + Left
-        if(mouse_LeftButton_ &&
-           mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_ &&
-           vac_)
-        {
-            return SKETCH_CHANGE_SNAP_THRESHOLD_ACTION;
-        }
-        // Ctrl + Alt + Left
-        if(mouse_LeftButton_ &&
-           mouse_AltWasDown_ &&
-           mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_ &&
-           vac_)
-        {
-            return SKETCH_CHANGE_PEN_WIDTH_AND_SNAP_THRESHOLD_ACTION;
-        }
-    }
-    else if(global()->toolMode() == Global::SCULPT)
-    {
-        if(mouse_LeftButton_ &&
-           !mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_ &&
-           vac_)
-        {
-            VectorAnimationComplex::Cell * hoveredCell =
-                        vac_->hoveredCell();
-
-            if(hoveredCell && hoveredCell->toVertexCell())
+            // Left on cell
+            if( vac_->hoveredCell() &&
+                mouse_LeftButton_ &&
+                !mouse_AltWasDown_ &&
+                !mouse_ControlWasDown_ &&
+                !mouse_ShiftWasDown_)
             {
                 return DRAG_AND_DROP_ACTION;
             }
-            else
+            // Left on transform widget
+            else if( vac_->hoveredTransformWidgetId() &&
+                     mouse_LeftButton_ &&
+                     !mouse_ControlWasDown_)
             {
-                return SCULPT_DEFORM_ACTION;
+                return TRANSFORM_SELECTION_ACTION;
+            }
+            // Left on empty space
+            else if (hoveredObject_.isNull() &&
+                     mouse_LeftButton_ &&
+                     !mouse_ControlWasDown_ )
+            {
+                return RECTANGLE_OF_SELECTION_ACTION;
             }
         }
-        // Ctrl + Left
-        if(mouse_LeftButton_ &&
-           !mouse_AltWasDown_ &&
-           mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_ &&
-           vac_)
+
+        // Sketch
+        else if(global()->toolMode() == Global::SKETCH)
         {
-            return SCULPT_CHANGE_RADIUS_ACTION;
+            // Left
+            if(mouse_LeftButton_ &&
+               !mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                return SKETCH_ACTION;
+            }
+            // Ctrl + Left
+            if(mouse_LeftButton_ &&
+               !mouse_AltWasDown_ &&
+               mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                return SKETCH_CHANGE_PEN_WIDTH_ACTION;
+            }
+            // Alt + Left
+            if(mouse_LeftButton_ &&
+               mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                return SKETCH_CHANGE_SNAP_THRESHOLD_ACTION;
+            }
+            // Ctrl + Alt + Left
+            if(mouse_LeftButton_ &&
+               mouse_AltWasDown_ &&
+               mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                return SKETCH_CHANGE_PEN_WIDTH_AND_SNAP_THRESHOLD_ACTION;
+            }
         }
-        // Alt + Left
-        if(mouse_LeftButton_ &&
-           mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           !mouse_ShiftWasDown_ &&
-           vac_)
+
+        // Sculpt
+        else if(global()->toolMode() == Global::SCULPT)
         {
-            return SCULPT_CHANGE_WIDTH_ACTION;
-        }
-        // Shift + Left
-        if(mouse_LeftButton_ &&
-           !mouse_AltWasDown_ &&
-           !mouse_ControlWasDown_ &&
-           mouse_ShiftWasDown_ &&
-           vac_)
-        {
-            return SCULPT_SMOOTH_ACTION;
+            // Left
+            if(mouse_LeftButton_ &&
+               !mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                VectorAnimationComplex::Cell * hoveredCell =
+                            vac_->hoveredCell();
+
+                if(hoveredCell && hoveredCell->toVertexCell())
+                {
+                    return DRAG_AND_DROP_ACTION;
+                }
+                else
+                {
+                    return SCULPT_DEFORM_ACTION;
+                }
+            }
+            // Ctrl + Left
+            if(mouse_LeftButton_ &&
+               !mouse_AltWasDown_ &&
+               mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                return SCULPT_CHANGE_RADIUS_ACTION;
+            }
+            // Alt + Left
+            if(mouse_LeftButton_ &&
+               mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               !mouse_ShiftWasDown_)
+            {
+                return SCULPT_CHANGE_WIDTH_ACTION;
+            }
+            // Shift + Left
+            if(mouse_LeftButton_ &&
+               !mouse_AltWasDown_ &&
+               !mouse_ControlWasDown_ &&
+               mouse_ShiftWasDown_)
+            {
+                return SCULPT_SMOOTH_ACTION;
+            }
         }
     }
 
@@ -399,7 +386,7 @@ void View::ClicEvent(int action, double x, double y)
     {
         if(!hoveredObject_.isNull() || global()->toolMode() == Global::SKETCH)
         {
-            vac_ = scene_->vectorAnimationComplex();
+            vac_ = scene_->activeVAC();
             if(vac_)
             {
                 vac_->split(x, y, interactiveTime(), true);
@@ -412,13 +399,14 @@ void View::ClicEvent(int action, double x, double y)
     }
     else if(action==PAINT_ACTION)
     {
-        vac_ = scene_->vectorAnimationComplex();
+        Layer * layer = scene_->activeLayer();
+        vac_ = layer ? layer->vac() : nullptr;
         if(vac_)
         {
             VectorAnimationComplex::Cell * paintedCell = vac_->paint(x, y, interactiveTime());
             if (!paintedCell)
             {
-                scene_->background()->setColor(global()->faceColor());
+                layer->background()->setColor(global()->faceColor());
                 scene_->emitChanged();
                 scene_->emitCheckpoint();
             }
@@ -526,17 +514,25 @@ void View::MoveEvent(double x, double y)
     // Update to-be-sculpted edge
     if(global()->toolMode() == Global::SCULPT)
     {
-        Time time = interactiveTime();
-        scene_->vectorAnimationComplex()->updateSculpt(x, y, time);
-        mustRedraw = true;
+        VectorAnimationComplex::VAC * vac = scene_->activeVAC();
+        if (vac)
+        {
+            Time time = interactiveTime();
+            vac->updateSculpt(x, y, time);
+            mustRedraw = true;
+        }
     }
 
     // Update to-be-painted face
     if(global()->toolMode() == Global::PAINT)
     {
-        Time time = interactiveTime();
-        scene_->vectorAnimationComplex()->updateToBePaintedFace(x, y, time);
-        mustRedraw = true;
+        VectorAnimationComplex::VAC * vac = scene_->activeVAC();
+        if (vac)
+        {
+            Time time = interactiveTime();
+            vac->updateToBePaintedFace(x, y, time);
+            mustRedraw = true;
+        }
     }
 
     // Redraw if necessary
@@ -961,13 +957,55 @@ void View::PMRReleaseEvent(int action, double x, double y)
  *              DRAWING
  */
 
+void View::onBackgroundDestroyed_(Background * background)
+{
+    destroyBackgroundRenderer_(background);
+}
+
+BackgroundRenderer * View::getBackgroundRenderer_(Background * background)
+{
+    auto it = backgroundRenderers_.find(background);
+    if (it != backgroundRenderers_.end())
+    {
+        return it.value();
+    }
+    else
+    {
+        return nullptr;
+    }
+}
+
+BackgroundRenderer * View::createBackgroundRenderer_(Background * background)
+{
+    BackgroundRenderer * res = new BackgroundRenderer(background, this);
+    connect(res, &BackgroundRenderer::backgroundDestroyed, this, &View::onBackgroundDestroyed_);
+    backgroundRenderers_.insert(background, res);
+    return res;
+}
+
+void View::destroyBackgroundRenderer_(Background * background)
+{
+    BackgroundRenderer * br = getBackgroundRenderer_(background);
+    backgroundRenderers_.remove(background);
+    delete br;
+}
+
+BackgroundRenderer * View::getOrCreateBackgroundRenderer_(Background * background)
+{
+    BackgroundRenderer * br = getBackgroundRenderer_(background);
+    if (!br) {
+        br = createBackgroundRenderer_(background);
+    }
+    return br;
+}
+
 void View::drawBackground_(Background * background, int frame)
 {
-    backgroundRenderers_[background]->draw(
-                frame,
-                global()->showCanvas(),
-                scene_->left(), scene_->top(), scene_->width(), scene_->height(),
-                xSceneMin(), xSceneMax(), ySceneMin(), ySceneMax());
+    BackgroundRenderer * br = getOrCreateBackgroundRenderer_(background);
+    br->draw(frame,
+             global()->showCanvas(),
+             scene_->left(), scene_->top(), scene_->width(), scene_->height(),
+             xSceneMin(), xSceneMax(), ySceneMin(), ySceneMax());
 }
 
 void View::drawScene()
@@ -1014,52 +1052,66 @@ void View::drawScene()
 
 void View::drawSceneDelegate_(Time t)
 {
-    // Draw background
-    drawBackground_(scene_->background(), t.frame()); // later: drawBackground_(layer_->background())
-
-    // Loop over all onion skins. Draw in this order:
-    //   1. onion skins before
-    //   2. onion skins after
-    //   3. current frame
-    //
-    // Note 1: When layers will be implemented, then only the active layer has onion skins
-    // Note 2: Backgrounds are always ignored for onion skinning
-
-    // Draw onion skins
-    viewSettings_.setMainDrawing(false);
-    if(viewSettings_.onionSkinningIsEnabled())
+    for (int j = 0; j < scene()->numLayers(); ++j)
     {
-        // Draw onion skins before
-        Time tOnion = t;
-        for(int i=0; i<viewSettings_.numOnionSkinsBefore(); ++i)
-        {
-            tOnion = tOnion - viewSettings_.onionSkinsTimeOffset();
-            glTranslated(-viewSettings_.onionSkinsXOffset(),-viewSettings_.onionSkinsYOffset(),0);
+        Layer * layer = scene()->layer(j);
+        if (!layer->isVisible()) {
+            continue;
         }
-        for(int i=0; i<viewSettings_.numOnionSkinsBefore(); ++i)
+        Background * background = layer->background();
+        VectorAnimationComplex::VAC * vac = layer->vac();
+
+        // Draw background
+        drawBackground_(background, t.frame());
+
+        // Loop over all onion skins. Draw in this order:
+        //   1. onion skins before
+        //   2. onion skins after
+        //   3. current frame
+        //
+        // Note 1: For now, we show onions skins for all layers
+        //         In the future, by default, we should show onion skins only
+        //         for the active layer, and allow user to show them for all
+        //         layer via a user option in the onion skin menu.
+        //
+        // Note 2: Backgrounds are always ignored for onion skinning
+
+        // Draw onion skins
+        viewSettings_.setMainDrawing(false);
+        if(viewSettings_.onionSkinningIsEnabled())
         {
-            scene_->draw(tOnion, viewSettings_); // XXX should be replaced by scene_->vectorAnimationComplex()->draw()
-            tOnion = tOnion + viewSettings_.onionSkinsTimeOffset();
-            glTranslated(viewSettings_.onionSkinsXOffset(),viewSettings_.onionSkinsYOffset(),0);
+            // Draw onion skins before
+            Time tOnion = t;
+            for(int i=0; i<viewSettings_.numOnionSkinsBefore(); ++i)
+            {
+                tOnion = tOnion - viewSettings_.onionSkinsTimeOffset();
+                glTranslated(-viewSettings_.onionSkinsXOffset(),-viewSettings_.onionSkinsYOffset(),0);
+            }
+            for(int i=0; i<viewSettings_.numOnionSkinsBefore(); ++i)
+            {
+                vac->draw(tOnion, viewSettings_);
+                tOnion = tOnion + viewSettings_.onionSkinsTimeOffset();
+                glTranslated(viewSettings_.onionSkinsXOffset(),viewSettings_.onionSkinsYOffset(),0);
+            }
+
+            // Draw onion skins after
+            tOnion = t;
+            for(int i=0; i<viewSettings_.numOnionSkinsAfter(); ++i)
+            {
+                glTranslated(viewSettings_.onionSkinsXOffset(),viewSettings_.onionSkinsYOffset(),0);
+                tOnion = tOnion + viewSettings_.onionSkinsTimeOffset();
+                vac->draw(tOnion, viewSettings_);
+            }
+            for(int i=0; i<viewSettings_.numOnionSkinsAfter(); ++i)
+            {
+                glTranslated(-viewSettings_.onionSkinsXOffset(),-viewSettings_.onionSkinsYOffset(),0);
+            }
         }
 
-        // Draw onion skins after
-        tOnion = t;
-        for(int i=0; i<viewSettings_.numOnionSkinsAfter(); ++i)
-        {
-            glTranslated(viewSettings_.onionSkinsXOffset(),viewSettings_.onionSkinsYOffset(),0);
-            tOnion = tOnion + viewSettings_.onionSkinsTimeOffset();
-            scene_->draw(tOnion, viewSettings_);
-        }
-        for(int i=0; i<viewSettings_.numOnionSkinsAfter(); ++i)
-        {
-            glTranslated(-viewSettings_.onionSkinsXOffset(),-viewSettings_.onionSkinsYOffset(),0);
-        }
+        // Draw current frame
+        viewSettings_.setMainDrawing(true);
+        vac->draw(t, viewSettings_);
     }
-
-    // Draw current frame
-    viewSettings_.setMainDrawing(true);
-    scene_->draw(t, viewSettings_);
 }
 
 void View::toggleOutline()
@@ -1555,7 +1607,8 @@ QImage View::drawToImage(Time t, double x, double y, double w, double h, int img
     {
         ViewSettings::DisplayMode oldDM = viewSettings_.displayMode();
         viewSettings_.setDisplayMode(ViewSettings::ILLUSTRATION);
-        drawBackground_(scene_->background(), t.frame());
+        // XXX Make it work with layers
+        //drawBackground_(scene_->background(), t.frame());
         viewSettings_.setMainDrawing(false);
         viewSettings_.setDrawCursor(false);
         scene_->draw(t, viewSettings_);
